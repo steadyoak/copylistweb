@@ -70,9 +70,12 @@
       transform: scale(0.99);
     }
     .item.blank{
-      min-height: 18px;
-      border-style: dashed;
-      color: transparent;
+      min-height: 18px;          /* 高度保持不变 */
+      padding: 12px 12px;        /* 和普通 item 一样，占位更自然 */
+      border: none;              /* 不显示边框 */
+      background: transparent;   /* 不显示背景 */
+      box-shadow: none;          /* 去掉阴影 */
+      color: transparent;        /* 不显示文字 */
       user-select: none;
       pointer-events: none;
     }
