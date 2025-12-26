@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>List Copier</title>
+  <style>
+    :root{
+      --bg:#fff;
+      --fg:#111;
+      --muted:#777;
+      --card:#fff;
+      --border:#e9e9e9;
+      --shadow: 0 1px 0 rgba(0,0,0,0.04);
+    }
+    html,body{
+      margin:0;
+      padding:0;
+      background:var(--bg);
+      color:var(--fg);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    .wrap{
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+    }
+    .topbar{
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      padding: 10px 0 8px;
+      z-index: 2;
+    }
+    .hint{
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+      margin: 0 0 8px;
+      user-select: none;
+    }
+    .list{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .item, .title{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 12px 12px;
+      line-height: 1.35;
+      word-break: break-word;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .title{
+      font-size: 18px;
+      font-weight: 800;
+      padding: 14px 12px;
+    }
+    .item{
+      font-size: 15px;
+    }
+    .item.copyable{
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .item.copyable:active{
+      transform: scale(0.99);
+    }
+    .item.blank{
+      min-height: 18px;
+      border-style: dashed;
+      color: transparent;
+      user-select: none;
+      pointer-events: none;
+    }
+    .toast{
+      position: fixed;
+      left: 50%;
+      bottom: calc(18px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      background: rgba(17,17,17,0.92);
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      max-width: calc(100vw - 24px);
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease;
+      z-index: 9999;
+    }
+    .toast.show{ opacity: 1; }
+    .error{
+      color: #b00020;
+      border: 1px solid #ffd1d1;
+      background: #fff5f5;
+      padding: 10px 12px;
+      border-radius: 12px;
+      line-height: 1.4;
+    }
+    .btnrow{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      margin-top:8px;
+    }
+    button{
+      border:1px solid var(--border);
+      background:#fff;
+      color:var(--fg);
+      border-radius:10px;
+      padding:10px 12px;
+      font-size:14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <p class="hint">点击普通行即可复制。以 # 开头的行会作为标题显示。空行只显示，不复制。</p>
+      <div class="btnrow">
+        <button id="reloadBtn" type="button">重新加载 list.txt</button>
+      </div>
+    </div>
+
+    <div id="container" class="list" aria-live="polite"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script>
+    const container = document.getElementById('container');
+    const toast = document.getElementById('toast');
+    const reloadBtn = document.getElementById('reloadBtn');
+
+    function showToast(msg){
+      toast.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove('show'), 1200);
+    }
+
+    // 兼容安卓：优先 Clipboard API，失败则降级到 execCommand('copy')
+    async function copyText(text){
+      // Clipboard API（需要安全上下文：https 或 localhost）
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+
+      // 退化方案：隐藏 textarea + 选中 + execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch (e) {
+        ok = false;
+      } finally {
+        document.body.removeChild(ta);
+      }
+      return ok;
+    }
+
+    function clearUI(){
+      container.innerHTML = '';
+    }
+
+    function addTitle(text){
+      const div = document.createElement('div');
+      div.className = 'title';
+      div.textContent = text;
+      container.appendChild(div);
+    }
+
+    function addBlank(){
+      const div = document.createElement('div');
+      div.className = 'item blank';
+      div.textContent = ' '; // 占位，保持高度
+      container.appendChild(div);
+    }
+
+    function addCopyableLine(text){
+      const div = document.createElement('div');
+      div.className = 'item copyable';
+      div.textContent = text;
+
+      div.addEventListener('click', async () => {
+        try{
+          const ok = await copyText(text);
+          showToast(ok ? '已复制' : '复制失败（浏览器限制）');
+        }catch(e){
+          showToast('复制失败（浏览器限制）');
+        }
+      }, { passive: true });
+
+      container.appendChild(div);
+    }
+
+    function renderFromText(raw){
+      clearUI();
+
+      // 兼容 CRLF / LF
+      const lines = raw.split(/\r?\n/);
+
+      // 每行先 trim 后分类
+      for (const original of lines) {
+        const line = (original ?? '').trim();
+
+        if (line.startsWith('#')) {
+          const t = line.slice(1).trim();
+          // 标题如果 # 后为空，也给个空标题块（按你规则：依旧算标题）
+          addTitle(t);
+          continue;
+        }
+
+        // 空行：显示但不复制
+        if (line === '') {
+          addBlank();
+          continue;
+        }
+
+        // 普通行：点一下复制
+        addCopyableLine(line);
+      }
+
+      if (container.children.length === 0) {
+        container.innerHTML = '<div class="error">list.txt 为空或无法解析。</div>';
+      }
+    }
+
+    async function loadList(){
+      try{
+        showToast('加载中…');
+        const res = await fetch('./list.txt', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text(); // 默认按 utf-8 解
+        renderFromText(text);
+        showToast('加载完成');
+      }catch(err){
+        clearUI();
+        container.innerHTML =
+          '<div class="error">无法加载同目录的 list.txt。<br>如果你是直接用文件方式打开（file://），很多浏览器会阻止 fetch。请用本地静态服务器（例如 python -m http.server）或放到站点上访问。</div>';
+      }
+    }
+
+    reloadBtn.addEventListener('click', loadList);
+    loadList();
+  </script>
+</body>
+</html>
